@@ -1,0 +1,124 @@
+name: Release Workflow
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # Match semantic version tags like v1.0.0
+      - '*-alpha' # Match pre-release alpha tags
+      - '*-beta' # Match pre-release beta tags
+
+# Protect release signing from concurrency cancellation.
+# Each tag push will create a unique concurrency group, preventing
+# simultaneous builds for different tags from cancelling each other's
+# in-progress signing jobs. This ensures that signing jobs for immutable
+# tags complete independently and are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # Absolutely prevent cancellation of in-progress jobs for this group.
+
+jobs:
+  build:
+    name: Build Artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: dist-artifacts
+          path: |
+            dist/
+            package.json
+          retention-days: 1 # Short retention as they will be signed and then released
+
+  sign:
+    name: Sign Release Artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: dist-artifacts
+          path: ./dist
+
+      - name: Configure GPG (Example - Replace with actual secure signing setup)
+        run: |
+          echo "Setting up GPG for signing..."
+          # In a real scenario, you would securely import your GPG private key.
+          # Example: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import --passphrase-fd 0
+          # Ensure appropriate passphrase handling (e.g., gpg-agent, or passing securely via stdin/env).
+          echo "GPG setup complete (placeholder)."
+
+      - name: Sign artifacts
+        run: |
+          echo "Signing artifacts in ./dist for ${{ github.ref }}..."
+          # Replace with your actual signing command. This command MUST fail if signing is unsuccessful.
+          # For instance: gpg --batch --yes --passphrase "${{ secrets.GPG_PASSPHRASE }}" --output ./dist/my_app.zip.sig --detach-sign --armor ./dist/my_app.zip
+          # As a placeholder, we'll create a dummy signature file.
+          touch ./dist/signed_manifest.sig
+          echo "Artifacts signed."
+          # If a real signing command fails, this step will fail, preventing the release.
+          # To meet "Partial signing states fail the release summary check", ensure your actual signing command
+          # has proper error handling and returns a non-zero exit code on failure.
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: signed-release-artifacts
+          path: ./dist
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to create and upload to a GitHub Release
+    steps:
+      - name: Download signed artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: signed-release-artifacts
+          path: ./release-assets
+
+      - name: Extract tag name
+        id: get_version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') }}
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./release-assets/ # Path to the directory or file(s) to upload
+          asset_name: ${{ steps.get_version.outputs.tag }}-artifacts.zip # Example asset name
+          asset_content_type: application/zip # Adjust content type based on asset
