@@ -1,0 +1,94 @@
+yaml
+# This CI/CD pipeline defines the workflow for building, scanning, signing, and publishing container images.
+# The critical fix implemented here ensures that an image is only signed and promoted
+# AFTER it has successfully passed the vulnerability scanning gate, operating on the image digest.
+# This prevents signing of images that have not been approved, addressing the reported vulnerability.
+
+variables:
+  DOCKER_IMAGE_NAME: my-app/image
+  DOCKER_REGISTRY: my-private-registry.example.com
+  # Use a temporary, unique tag for initial push to facilitate scanning before promotion.
+  # This tag is typically short-lived and not meant for production consumers.
+  TEMP_IMAGE_TAG: $CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID 
+  # The production tag, applied only after scan approval and signing.
+  # This tag will always point to an immutable, scanned, and signed image digest.
+  PROD_IMAGE_TAG: latest # Or any other production tag, e.g., $CI_COMMIT_TAG
+
+stages:
+  - build
+  - scan
+  - sign_and_publish
+
+.docker_build_and_push_template:
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    # Ensure Docker login credentials are securely provided via CI/CD variables
+    - echo "Logging into Docker registry: $DOCKER_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $DOCKER_REGISTRY
+
+build_and_push_temp_image:
+  extends: .docker_build_and_push_template
+  stage: build
+  script:
+    - echo "Building image: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$TEMP_IMAGE_TAG"
+    - docker build -t $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$TEMP_IMAGE_TAG .
+    - echo "Pushing temporary image to registry for scanning..."
+    - docker push $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$TEMP_IMAGE_TAG
+    # IMPORTANT: Capture the full immutable image digest after push.
+    # All subsequent steps (scanning, signing, promotion) MUST refer to this digest.
+    # `docker inspect` reliably retrieves the full 'repo@digest' reference for the image that was just pushed.
+    - IMAGE_DIGEST_FULL_REF=$(docker inspect --format='{{index .RepoDigests 0}}' $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$TEMP_IMAGE_TAG)
+    - echo "Image built and pushed with temporary tag. Full digest reference: $IMAGE_DIGEST_FULL_REF"
+    # Export the full digest reference to be used by downstream stages.
+    - echo "PUSHED_IMAGE_FULL_REF=$IMAGE_DIGEST_FULL_REF" > build_output.env
+  artifacts:
+    reports:
+      dotenv: build_output.env
+    paths:
+      - build_output.env # Make the digest reference available to downstream stages
+
+scan_image_for_vulnerabilities:
+  image: aquasec/trivy:latest # Example: Using Trivy. Replace with your chosen scanner (Clair, Snyk, etc.).
+  stage: scan
+  # This job depends on the successful completion of the build_and_push_temp_image job.
+  needs: ["build_and_push_temp_image"]
+  script:
+    - echo "Starting vulnerability scan for image: $PUSHED_IMAGE_FULL_REF"
+    # Trivy will exit with a non-zero code if critical/high vulnerabilities are found,
+    # causing this job to fail and preventing subsequent signing/publishing.
+    # Adjust --exit-code and --severity thresholds as per organizational policy.
+    - trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed $PUSHED_IMAGE_FULL_REF
+    - echo "Vulnerability scan passed successfully for image digest: $PUSHED_IMAGE_FULL_REF"
+    # No explicit artifact needed from here, as job success implies scan approval.
+
+sign_and_publish_approved_image:
+  extends: .docker_build_and_push_template
+  stage: sign_and_publish
+  # This job will ONLY run if 'scan_image_for_vulnerabilities' passed successfully,
+  # ensuring that only approved digests are signed and promoted.
+  needs: ["scan_image_for_vulnerabilities"]
+  # Use a cosign image that has necessary tools for signing (e.g., keyless signing, KMS integration).
+  image: gcr.io/projectsigstore/cosign/releases/cosign:v2.2.1
+  script:
+    - echo "Starting signing and promotion process for approved image: $PUSHED_IMAGE_FULL_REF"
+    # Perform the signature using the approved immutable image digest.
+    - echo "Signing image digest: $PUSHED_IMAGE_FULL_REF"
+    # --yes flag confirms the action non-interactively. For production, ensure appropriate
+    # OIDC or KMS configuration for keyless signing is in place (e.g., via environment variables).
+    - cosign sign --yes $PUSHED_IMAGE_FULL_REF
+    - echo "Image digest successfully signed."
+
+    # After successful signing, promote the image by applying the production tag
+    # to the *exact same approved digest* and pushing it to the registry.
+    - echo "Promoting image $PUSHED_IMAGE_FULL_REF to production tag: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$PROD_IMAGE_TAG"
+    # Pull by digest to ensure we're working with the exact scanned and signed image locally.
+    - docker pull $PUSHED_IMAGE_FULL_REF
+    # Tag the image using its digest with the production-ready tag.
+    - docker tag $PUSHED_IMAGE_FULL_REF $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$PROD_IMAGE_TAG
+    # Push the production-tagged image.
+    - docker push $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$PROD_IMAGE_TAG
+    # Extract only the digest part for the final message for clarity.
+    - IMAGE_DIGEST_ONLY=$(echo $PUSHED_IMAGE_FULL_REF | cut -d'@' -f2)
+    - echo "Image $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$PROD_IMAGE_TAG (Digest: $IMAGE_DIGEST_ONLY) signed and published successfully."
