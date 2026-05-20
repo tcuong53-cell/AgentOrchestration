@@ -1,0 +1,37 @@
+name: Supply Chain Checks
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+  pull_request:
+    branches:
+      - main
+      - release/*
+  workflow_dispatch:
+
+jobs:
+  run-linters:
+    # Pinning reusable workflow to a specific commit SHA for security and integrity.
+    # To update this reusable workflow, replace the SHA with the latest commit hash from the shared workflows repository.
+    uses: my-org/shared-workflows/.github/workflows/run-linter.yml@e1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0
+    with:
+      language: typescript
+
+  security-scan:
+    # Pinning reusable workflow (CodeQL Action) to a specific commit SHA for security and integrity.
+    # To update this action, replace the SHA with the latest commit hash from the action's repository.
+    uses: github/codeql-action/analyze@9421a4f00d23821033481d683070473a2414742a
+    with:
+      language: javascript
+      category: "/language:javascript"
+
+  publish-artifact:
+    needs: security-scan # Ensure security scan completes successfully before attempting to publish.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Pinning reusable workflow to a specific commit SHA for security and integrity.
+    # To update this reusable workflow, replace the SHA with the latest commit hash from the shared workflows repository.
+    uses: my-org/shared-workflows/.github/workflows/publish-package.yml@f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1
+    with:
+      package-name: my-app
