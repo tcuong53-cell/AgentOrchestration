@@ -77,122 +77,124 @@ class AgentRuntime:
         proc = self._processes.get(agent_id)
         return proc is not None and proc.poll() is None
 
-# 2019-01-11T10:56:26 update
+# Add logic to enforce server-side limits before starting an agent
+def enforce_server_limits(agent_id):
+    # Example logic: Check if the number of running agents exceeds a threshold
+    max_running_agents = 10
+    current_running_agents = sum(1 for state in self._states.values() if state == RuntimeState.RUNNING)
+    
+    if current_running_agents >= max_running_agents:
+        logger.warning(f"Agent {agent_id} cannot be started as the maximum number of running agents ({max_running_agents}) has been reached.")
+        return False
+    
+    # Add more logic to enforce other server-side limits as needed
+    return True
 
-# 2019-01-22T16:22:30 update
+# Modify start method to include server limit enforcement
+def start(self, agent_id: str, command: list, env: Optional[Dict] = None) -> bool:
+    if not enforce_server_limits(agent_id):
+        return False
+    
+    # Existing code for starting the agent
+    self._states[agent_id] = RuntimeState.STARTING
+    process_env = os.environ.copy()
+    if env:
+        process_env.update(env)
+    process_env["AO_AGENT_ID"] = agent_id
 
-# 2019-03-06T18:13:59 update
+    try:
+        proc = subprocess.Popen(
+            command,
+            env=process_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self._processes[agent_id] = proc
+        self._states[agent_id] = RuntimeState.RUNNING
+        logger.info(f"Agent {agent_id} started (PID: {proc.pid})")
+        return True
+    except Exception as e:
+        self._states[agent_id] = RuntimeState.CRASHED
+        logger.error(f"Failed to start agent {agent_id}: {e}")
+        return False
 
-# 2019-03-15T11:30:26 update
+# Add logic to enforce server-side limits before stopping an agent
+def enforce_server_limits_for_stop(agent_id):
+    # Example logic: Check if the number of running agents exceeds a threshold
+    max_running_agents = 10
+    current_running_agents = sum(1 for state in self._states.values() if state == RuntimeState.RUNNING)
+    
+    if current_running_agents >= max_running_agents:
+        logger.warning(f"Agent {agent_id} cannot be stopped as the maximum number of running agents ({max_running_agents}) has been reached.")
+        return False
+    
+    # Add more logic to enforce other server-side limits as needed
+    return True
 
-# 2019-03-18T11:22:04 update
+# Modify stop method to include server limit enforcement
+def stop(self, agent_id: str, timeout: int = 10) -> bool:
+    if not enforce_server_limits_for_stop(agent_id):
+        return False
+    
+    # Existing code for stopping the agent
+    proc = self._processes.get(agent_id)
+    if not proc or proc.poll() is not None:
+        return False
 
-# 2019-03-29T09:30:22 update
+    self._states[agent_id] = RuntimeState.STOPPING
+    proc.send_signal(signal.SIGTERM)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
-# 2019-05-06T17:17:42 update
+    self._states[agent_id] = RuntimeState.STOPPED
+    logger.info(f"Agent {agent_id} stopped")
+    return True
 
-# 2019-07-08T10:46:12 update
+# Add logic to enforce server-side limits before getting the state of an agent
+def enforce_server_limits_for_state(agent_id):
+    # Example logic: Check if the number of running agents exceeds a threshold
+    max_running_agents = 10
+    current_running_agents = sum(1 for state in self._states.values() if state == RuntimeState.RUNNING)
+    
+    if current_running_agents >= max_running_agents:
+        logger.warning(f"Agent {agent_id} cannot be queried as the maximum number of running agents ({max_running_agents}) has been reached.")
+        return False
+    
+    # Add more logic to enforce other server-side limits as needed
+    return True
 
-# 2019-10-30T15:01:34 update
+# Modify get_state method to include server limit enforcement
+def get_state(self, agent_id: str) -> RuntimeState:
+    if not enforce_server_limits_for_state(agent_id):
+        return RuntimeState.STOPPED
+    
+    # Existing code for getting the state of an agent
+    proc = self._processes.get(agent_id)
+    if proc and proc.poll() is not None:
+        self._states[agent_id] = RuntimeState.CRASHED
+    return self._states.get(agent_id, RuntimeState.STOPPED)
 
-# 2019-11-21T11:46:57 update
+# Add logic to enforce server-side limits before checking if an agent is running
+def enforce_server_limits_for_running(agent_id):
+    # Example logic: Check if the number of running agents exceeds a threshold
+    max_running_agents = 10
+    current_running_agents = sum(1 for state in self._states.values() if state == RuntimeState.RUNNING)
+    
+    if current_running_agents >= max_running_agents:
+        logger.warning(f"Agent {agent_id} cannot be checked as the maximum number of running agents ({max_running_agents}) has been reached.")
+        return False
+    
+    # Add more logic to enforce other server-side limits as needed
+    return True
 
-# 2019-12-09T13:23:07 update
-
-# 2020-02-18T14:01:01 update
-
-# 2020-02-19T11:51:07 update
-
-# 2020-02-27T18:21:42 update
-
-# 2020-03-11T12:29:19 update
-
-# 2020-04-13T09:40:09 update
-
-# 2020-06-16T14:21:27 update
-
-# 2020-08-12T12:56:50 update
-
-# 2020-08-13T09:41:21 update
-
-# 2020-09-10T08:08:18 update
-
-# 2020-10-02T12:22:16 update
-
-# 2020-10-14T13:05:00 update
-
-# 2020-10-19T14:32:13 update
-
-# 2021-02-11T08:23:22 update
-
-# 2021-02-19T19:20:29 update
-
-# 2021-03-24T19:22:02 update
-
-# 2021-09-03T16:39:23 update
-
-# 2021-10-11T10:52:21 update
-
-# 2021-12-13T09:33:23 update
-
-# 2022-01-04T11:11:07 update
-
-# 2022-07-31T15:24:35 update
-
-# 2022-08-05T19:33:09 update
-
-# 2022-10-07T20:08:25 update
-
-# 2022-10-20T09:57:32 update
-
-# 2023-01-06T17:26:45 update
-
-# 2023-01-12T18:21:36 update
-
-# 2023-03-30T19:52:43 update
-
-# 2023-06-06T16:53:33 update
-
-# 2023-09-21T18:21:37 update
-
-# 2024-01-02T10:34:11 update
-
-# 2024-01-04T10:43:54 update
-
-# 2024-03-28T11:14:49 update
-
-# 2024-04-22T10:30:24 update
-
-# 2024-05-16T14:19:27 update
-
-# 2024-06-04T10:50:47 update
-
-# 2024-08-08T20:51:15 update
-
-# 2024-10-14T18:24:05 update
-
-# 2024-10-28T09:06:13 update
-
-# 2024-12-27T18:03:47 update
-
-# 2025-01-03T09:46:58 update
-
-# 2025-01-20T08:28:48 update
-
-# 2025-02-21T20:23:27 update
-
-# 2025-04-25T13:08:47 update
-
-# 2025-06-11T20:55:12 update
-
-# 2025-06-16T17:35:40 update
-
-# 2025-08-01T19:25:37 update
-
-# 2025-08-27T20:53:40 update
-
-# 2026-01-15T13:31:14 update
-
-# 2026-02-06T16:29:56 update
-
-# 2026-04-02T10:52:38 update
+# Modify is_running method to include server limit enforcement
+def is_running(self, agent_id: str) -> bool:
+    if not enforce_server_limits_for_running(agent_id):
+        return False
+    
+    # Existing code for checking if an agent is running
+    proc = self._processes.get(agent_id)
+    return proc is not None and proc.poll() is None
