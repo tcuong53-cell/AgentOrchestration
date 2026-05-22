@@ -9,7 +9,6 @@ from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 
-
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path.startswith("/api/v2") and request.url.path != "/api/v2/auth/token":
